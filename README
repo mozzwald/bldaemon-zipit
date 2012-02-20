@@ -1,0 +1,12 @@
+Backlight daemon for Zipit Z2 revision 2012-02-20
+
+2010-04-26 Tal Stokes
+2012-02-20 Joe Honold <mozzwald@mozzwald.com>
+
+Manages screen and keyboard backlights:
+  -turns them off when lid is closed and on when lid is opened
+  -dims them when on battery and brightens them when on AC (or reverse)
+  -respects changes made to brightness while running
+
+Thanks to Russell K. Davis for lid switch and AC
+plug detection routines, and help
