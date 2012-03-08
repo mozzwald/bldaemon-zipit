@@ -3,6 +3,7 @@
  *
  * 2010-04-26 Tal Stokes
  * 2012-02-20 Joe Honold <mozzwald@mozzwald.com>
+ * 2012-03-08 mcmajeres -- added seperate timer for keyboard -- works in conjunction with ebindkeys
  *
  * Manages screen and keyboard backlights:
  * -turns them off when lid is closed and on when lid is opened
@@ -19,6 +20,7 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/mman.h>
+#include <unistd.h> /* close */
 
 #define MAP_SIZE 4096UL
 
@@ -39,6 +41,9 @@ int gpio_read(void *map_base, int gpio) {
 	return (*reg >> (gpio&31)) & 1;
 }
 
+#define LID_CLOSED  0
+#define LID_OPEN    1
+#define LID_UNKNOWN 255
 int lidstate() {
 	int fd;
 	int retval;
@@ -52,17 +57,17 @@ int lidstate() {
 
 	switch(gpio_read(map_base,98))
 	{
-		case 0:
-			/* lid is closed */
-			retval = 0;
+		case 0: /* lid is closed */
+			retval = LID_CLOSED;
 			break;
-		case 1:
-			/* lid is open */
-			retval = 1;
+
+		case 1: /* lid is open */
+			retval = LID_OPEN;
 			break;
+
 		default:
-			/* will never reach here unless something has gone terribly wrong */
-			retval = 255;
+			retval = LID_UNKNOWN;
+
 	}
 
 	if(munmap(map_base, MAP_SIZE) == -1) exit(255) ;
@@ -70,6 +75,9 @@ int lidstate() {
 	return retval;
 }
 
+#define PWR_BATTERY 0
+#define PWR_AC_CORD 1
+#define PWR_UNKNOWN 255
 int powerstate() {
         int fd;
         int retval;
@@ -84,15 +92,15 @@ int powerstate() {
         switch(gpio_read(map_base,0))
         {
                 case 0: /* battery */
-                        retval = 0;
+                        retval = PWR_BATTERY;
+			break;
+
+                case 1: /* mains */
+                        retval = PWR_AC_CORD;
                         break;
-                case 1:
-                        /* mains */
-                        retval = 1;
-                        break;
+
                 default:
-                        /* will never reach here unless something has gone terribly wrong */
-                        retval = 255;
+			retval = PWR_UNKNOWN;
         }
 
         if(munmap(map_base, MAP_SIZE) == -1) exit(255) ;
@@ -100,6 +108,7 @@ int powerstate() {
         return retval;
 }
 
+//on --> 1  off --> 0
 int lightswitch(int onoroff) {	//turns backlight power on or off
 	static const char screenfile[] = "/sys/class/backlight/pwm-backlight.0/bl_power";
 	static const char keyfile[] = "/sys/class/backlight/pwm-backlight.1/bl_power";
@@ -108,7 +117,7 @@ int lightswitch(int onoroff) {	//turns backlight power on or off
 	int success;
 	if (scr != NULL && key != NULL) {
 		char buf [5];
-		sprintf(buf, "%i", onoroff);	//WARNING: opposite of what you might expect - 1 is off and 0 is on
+		sprintf(buf, "%i", (onoroff == 0?1:0));	
 		fputs(buf, scr);
 		fputs(buf, key);
 		fclose(scr);
@@ -120,22 +129,33 @@ int lightswitch(int onoroff) {	//turns backlight power on or off
 	return success;
 }
 
-int bright(int scrbr, int keybr) {	//set screen and keyboard to given brightness
+int lcdb(int scrbr) {	//set screen to given brightness
 	static const char screenfile[] = "/sys/class/backlight/pwm-backlight.0/brightness";
-	static const char keyfile[] = "/sys/class/backlight/pwm-backlight.1/brightness";
 	FILE *scr = fopen(screenfile, "w");
+
+	int success;
+	if (scr != NULL) {
+		char scrbuf [5];
+//		itoa(scrbr, scrbuf, 10);
+		sprintf(scrbuf, "%i", scrbr);
+		fputs(scrbuf, scr);
+		fclose(scr);
+		success = 1;
+	} else {
+	success = 0;
+	}
+	return success;
+}
+
+int keyb(int keybr) {	//set keyboard to given brightness
+	static const char keyfile[] = "/sys/class/backlight/pwm-backlight.1/brightness";
 	FILE *key = fopen(keyfile, "w");
 	int success;
-	if (scr != NULL && key != NULL) {
-		char scrbuf [5];
+	if (key != NULL) {
 		char keybuf [5];
-//		itoa(scrbr, scrbuf, 10);
 //		itoa(keybr, keybuf, 10);
-		sprintf(scrbuf, "%i", scrbr);
 		sprintf(keybuf, "%i", keybr);
-		fputs(scrbuf, scr);
 		fputs(keybuf, key);
-		fclose(scr);
 		fclose(key);
 		success = 1;
 	} else {
@@ -143,6 +163,7 @@ int bright(int scrbr, int keybr) {	//set screen and keyboard to given brightness
 	}
 	return success;
 }
+
 
 int getscr(void) {	//return current brightness of screen
 	static const char screenfile[] = "/sys/class/backlight/pwm-backlight.0/actual_brightness";
@@ -168,54 +189,88 @@ int getkeyb(void) {	//return current brightness of keyboard
 	return keybr;
 }
 
+//on --> 0  off --> 1
+#define KEYS_ON  0
+#define KEYS_OFF 1
+int keyPower(int onoroff) {	//turns backlight power on or off
+	FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
 
+	if (key != NULL) {
+		char buf [5];
+		sprintf(buf, "%i", onoroff);	
+		fputs(buf, key);
+		fclose(key);
+	}	
+}
+
+int GetKeyPressed(void) {	//return value of /tmp/keypress
+	static const char keyfile[] = "/tmp/keypressed";
+	FILE *key = fopen(keyfile, "r+");
+	int keybr;
+	if (key != NULL) {
+		char buf [5];
+		keybr = atoi(fgets(buf, sizeof buf, key));
+		//reset the value to zero		
+		if(keybr != 0) fputs("0", key);
+		
+		fclose(key);
+	}
+	return keybr;
+}
+
+#define TIMEOUT 5
 int main(int argc, char **argv) {
-	int lid = lidstate();		//init to sane values
-	int power = powerstate();
-	int oldlid;
-	int oldpower;
+	int lid = LID_UNKNOWN; 
+	int power = PWR_UNKNOWN;
 	int brightscr=1023;	//screen brightness on AC (default at start)
 	int brightkeyb=512;	//keyboard brightness on AC
 	int dimscr=512;		//screen brightness on battery
-	int dimkeyb=0;	//keyboard brightness on battery
+	int dimkeyb=300;		//keyboard brightness on battery
+	int keyTimer = 0;
 
-	if(power){	//set values based on AC before looping
-		system("setterm -blank 0 >/dev/tty0");     //set screen blank to never
+	//intialize the keyboard lights	
+	keyb(powerstate() == PWR_AC_CORD?brightkeyb:dimkeyb);			
+
+	while(1) {		//main loop
+			
+		if(GetKeyPressed() == 1)//a key has been pressed -- reset the timer
+			keyTimer = 0;
+							
+		else if(keyTimer == TIMEOUT && !power)
+			keyPower(KEYS_OFF);			
+		
+		//don't let the timer roll
+		if(keyTimer <= TIMEOUT)									
+			keyTimer++;
+		
+
+		if(lid != lidstate()) 
+		{	
+			lid = lidstate();
+			lightswitch(lid);
+		}
+		
+		if(power != powerstate())
+		{	//there has been a change in the powerstate
+			keyTimer = 0;
+			power = powerstate();
+			if (power) {	//AC is plugged in
+				system("echo -ne \"\\033[9;0]\" >/dev/tty0");	//set screen blank to never
 		dimscr = getscr();      //store current brightness  as dim values
 		dimkeyb = getkeyb();
-		bright(brightscr, brightkeyb);  //and brighten lights
-	}else{
-		system("setterm -blank 5 >/dev/tty0");     //set screen blank to 5
+				keyPower(KEYS_ON);
+				lcdb(brightscr);
+				keyb(brightkeyb);	//and brighten lights
+			}
+			else{		//AC is unplugged
+				system("echo -ne \"\\033[9;1]\" >/dev/tty0");	//set screen blank to 1 minutes
 		brightscr = getscr();   //store current brightness as bright
 		brightkeyb = getkeyb();
-		bright(dimscr, dimkeyb);        //and dim lights
+				lcdb(dimscr);
+				keyb(dimkeyb);	//and dim lights
+			}
 	}
 
-	while(1) {			//main loop
-		oldlid = lid;		//store current values for comparison
-		oldpower = power;
-
-		while(lid == oldlid && power == oldpower) { //loop until something changes
 			sleep(1);		//wait one second
-			lid = lidstate();		//update lid status
-			power = powerstate();	//update AC status
-		}
-		// Loop exited. Something has changed.
-
-		if (lid && !oldlid) lightswitch(0);	//lid is open and wasn't, turn on
-		if (!lid && oldlid) lightswitch(1); //lid is closed and wasn't, turn off
-		if (power && !oldpower) {	//AC is plugged in and wasn't
-			system("setterm -blank 0 >/dev/tty0");	//set screen blank to never
-			dimscr = getscr();	//store current brightness as dim values
-			dimkeyb = getkeyb();
-			bright(brightscr, brightkeyb);	//and brighten lights
-		}
-		if (!power && oldpower) {		//AC isn't plugged in and was
-			system("setterm -blank 5 >/dev/tty0");	//set screen blank to 5 minutes
-			brightscr = getscr();	//store current brightness as bright
-			brightkeyb = getkeyb();
-			bright(dimscr, dimkeyb);	//and dim lights
-		}
-
 	}
 }
