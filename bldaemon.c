@@ -3,7 +3,8 @@
  *
  * 2010-04-26 Tal Stokes
  * 2012-02-20 Joe Honold <mozzwald@mozzwald.com>
- * 2012-03-08 mcmajeres -- added seperate timer for keyboard -- works in conjunction with ebindkeys
+ * 2012-03-08 mcmajeres  <mark@engine12.com> -- added seperate timer for keyboard -- works in conjunction with ebindkeys
+ * 2012-03-23 mcmajeres      -- changed blanking control to the framebuffer and added posix timers -- still have a polling loop :(
  *
  * Manages screen and keyboard backlights:
  * -turns them off when lid is closed and on when lid is opened
@@ -14,6 +15,7 @@
  * plug detection routines, and help
  *
  ***********************************************************************/
+#define _GNU_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +23,13 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <unistd.h> /* close */
+
+
+#include <unistd.h>
+#include <time.h>
+#include <assert.h>
+#include <errno.h>
+#include <signal.h>
 
 #define MAP_SIZE 4096UL
 
@@ -189,15 +198,46 @@ int getkeyb(void) {	//return current brightness of keyboard
 	return keybr;
 }
 
+#define CLOCKID CLOCK_MONOTONIC
+#define SIG SIGALRM
+#define KEYS_TIMER 101
+#define LCD_TIMER  201
+#define KEYS_TIMEOUT 500  //5secs
+#define LCD_TIMEOUT  3000 //30 secs  
+
 //on --> 0  off --> 1
 #define KEYS_ON  0
 #define KEYS_OFF 1
-int keyPower(int onoroff) {	//turns backlight power on or off
+void keysOn() {	//turns backlight power on or off
+
+	sigset_t mask;
+	/* Block timer signal temporarily */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIG);
+	if (sigprocmask(SIG_SETMASK, &mask, NULL) == -1)
+	   perror("sigprocmask");
+
 	FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
 
 	if (key != NULL) {
 		char buf [5];
-		sprintf(buf, "%i", onoroff);	
+		sprintf(buf, "%i", KEYS_ON);	
+		fputs(buf, key);
+		fclose(key);
+	}	
+
+   /* Unlock the timer signal, so that timer notification nan be delivered */
+   if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
+	   perror("sigprocmask");
+}
+
+inline void keysOff() {	//turns backlight power on or off
+
+	FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
+
+	if (key != NULL) {
+		char buf [5];
+		sprintf(buf, "%i", KEYS_OFF);	
 		fputs(buf, key);
 		fclose(key);
 	}	
@@ -218,7 +258,106 @@ int GetKeyPressed(void) {	//return value of /tmp/keypress
 	return keybr;
 }
 
-#define TIMEOUT 5
+
+
+
+static timer_t keys_timerid = 0;
+static timer_t lcd_timerid = 0;
+static unsigned int bScreenOff = 0;
+
+inline void screenOn(){	
+	sigset_t mask;
+	/* Block timer signal temporarily */
+	sigemptyset(&mask);
+	sigaddset(&mask, SIG);
+	if (sigprocmask(SIG_SETMASK, &mask, NULL) == -1)
+	   perror("sigprocmask");
+	
+	if(bScreenOff){//turn it back on
+		system("echo 0 >/sys/class/graphics/fb0/blank");
+		bScreenOff = 0;
+	}
+
+   /* Unlock the timer signal, so that timer notification nan be delivered */
+   if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
+	   perror("sigprocmask");
+}
+	
+inline void screenOff(){	
+	system("echo 1 >/sys/class/graphics/fb0/blank");
+	bScreenOff = 1;
+}
+
+static void onTimer(int sig, siginfo_t *si, void *uc)
+{
+	switch(si->si_int){
+		case KEYS_TIMER:
+			keysOff();	
+			break;
+	
+		case LCD_TIMER:
+			screenOff();
+			break;
+
+		default:
+			break;
+	}
+}
+   
+     
+#define errExit(msg)    do { perror(msg); return 0; \
+                        } while (0)
+
+timer_t create_timer(int timerName, unsigned int freq_msecs)
+{
+    struct itimerspec 	its;
+						its.it_value.tv_sec = freq_msecs / 100;
+						its.it_value.tv_nsec = 0;
+						its.it_interval.tv_sec = 0;
+						its.it_interval.tv_nsec = 0;
+						
+	struct sigevent 	sev;
+						sev.sigev_notify = SIGEV_SIGNAL;
+						sev.sigev_signo = SIG;
+						sev.sigev_value.sival_int = timerName;
+
+	struct sigaction 	sa;
+						sa.sa_flags = SA_SIGINFO;
+						sa.sa_sigaction = onTimer;
+
+	timer_t timerid=0;
+
+	/* Establish handler for timer signal */
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIG, &sa, NULL) == -1)
+		errExit("sigaction");
+
+	/* Create the timer */
+	if (timer_create(CLOCKID, &sev, &timerid) == -1)
+		errExit("timer_create");
+	
+   /* Start the timer */
+   if (timer_settime(timerid, 0, &its, NULL) == -1)
+         errExit("timer_settime");
+   
+   return timerid;
+}
+							
+int set_timer(timer_t timerid, unsigned int freq_msecs)
+{
+    struct itimerspec 	its;
+						its.it_value.tv_sec = freq_msecs / 100;
+						its.it_value.tv_nsec = 0;
+						its.it_interval.tv_sec = 0;
+						its.it_interval.tv_nsec = 0;
+	
+   /* Start the timer */
+   if (timer_settime(timerid, 0, &its, NULL) == -1)
+         errExit("timer_settime");
+   
+   return 1;
+}
+   
 int main(int argc, char **argv) {
 	int lid = LID_UNKNOWN; 
 	int power = PWR_UNKNOWN;
@@ -228,21 +367,25 @@ int main(int argc, char **argv) {
 	int dimkeyb=300;		//keyboard brightness on battery
 	int keyTimer = 0;
 
+	system("echo -ne \"\\033[9;0]\" >/dev/tty0");	//set screen blank to never -- it doesn't blank the frame buffer so don't use it
+					
 	//intialize the keyboard lights	
 	keyb(powerstate() == PWR_AC_CORD?brightkeyb:dimkeyb);			
 
+	keys_timerid = create_timer(KEYS_TIMER, KEYS_TIMEOUT);
+	lcd_timerid = create_timer(LCD_TIMER, LCD_TIMEOUT);
+
 	while(1) {		//main loop
 			
-		if(GetKeyPressed() == 1)//a key has been pressed -- reset the timer
-			keyTimer = 0;
-							
-		else if(keyTimer == TIMEOUT && !power)
-			keyPower(KEYS_OFF);			
-		
-		//don't let the timer roll
-		if(keyTimer <= TIMEOUT)									
-			keyTimer++;
-		
+		if(!power && GetKeyPressed() == 1) //if there is power the timers are not active, so nothing needs to be done
+		{	
+			//a key has been pressed -- reset the timers
+			set_timer(keys_timerid, KEYS_TIMEOUT);
+			set_timer(lcd_timerid, LCD_TIMEOUT);
+			
+			screenOn();
+		}
+
 
 		if(lid != lidstate()) 
 		{	
@@ -255,22 +398,40 @@ int main(int argc, char **argv) {
 			keyTimer = 0;
 			power = powerstate();
 			if (power) {	//AC is plugged in
-				system("echo -ne \"\\033[9;0]\" >/dev/tty0");	//set screen blank to never
-		dimscr = getscr();      //store current brightness  as dim values
-		dimkeyb = getkeyb();
-				keyPower(KEYS_ON);
+		//		system("echo -ne \"\\033[9;0]\" >/dev/tty0");	//set screen blank to never
+				screenOn();
+				
+				set_timer(keys_timerid, 0);
+				set_timer(lcd_timerid, 0);	
+			
+				dimscr = getscr();      //store current brightness  as dim values
+				dimkeyb = getkeyb();
+				keysOn();
 				lcdb(brightscr);
 				keyb(brightkeyb);	//and brighten lights
 			}
 			else{		//AC is unplugged
-				system("echo -ne \"\\033[9;1]\" >/dev/tty0");	//set screen blank to 1 minutes
-		brightscr = getscr();   //store current brightness as bright
-		brightkeyb = getkeyb();
+		//		system("echo -ne \"\\033[9;1]\" >/dev/tty0");	//set screen blank to 1 minutes
+
+				set_timer(keys_timerid, KEYS_TIMEOUT);
+				set_timer(lcd_timerid, LCD_TIMEOUT);	
+			
+				brightscr = getscr();   //store current brightness as bright
+				brightkeyb = getkeyb();
 				lcdb(dimscr);
 				keyb(dimkeyb);	//and dim lights
 			}
-	}
-
-			sleep(1);		//wait one second
+		}
+			
+		sleep(1);		//wait one second
 	}
 }
+
+
+
+
+
+
+
+
+
