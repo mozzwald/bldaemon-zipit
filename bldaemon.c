@@ -173,6 +173,24 @@ int keyb(int keybr) {	//set keyboard to given brightness
 	return success;
 }
 
+int toggleLED(int bOn) {	//set keyboard to given brightness
+	static const char keyfile[] = "/sys/class/leds/z2:green:wifi/brightness";
+	FILE *key = fopen(keyfile, "w");
+	int success;
+	
+	if (key != NULL) {
+		char keybuf [5];
+//		itoa(keybr, keybuf, 10);
+		sprintf(keybuf, "%i", bOn==0?0:255);
+		fputs(keybuf, key);
+		fclose(key);
+		success = 1;
+	} else {
+	success = 0;
+	}
+	return success;
+}
+
 
 int getscr(void) {	//return current brightness of screen
 	static const char screenfile[] = "/sys/class/backlight/pwm-backlight.0/actual_brightness";
@@ -200,10 +218,12 @@ int getkeyb(void) {	//return current brightness of keyboard
 
 #define CLOCKID CLOCK_MONOTONIC
 #define SIG SIGALRM
-#define KEYS_TIMER 101
-#define LCD_TIMER  201
-#define KEYS_TIMEOUT 500  //5secs
-#define LCD_TIMEOUT  3000 //30 secs  
+#define KEYS_TIMER 		101
+#define LCD_TIMER  		201
+#define POWER_TIMER  	301
+#define KEYS_TIMEOUT 	500  //5secs
+#define LCD_TIMEOUT  	6000 //60 secs  
+#define POWER_TIMEOUT 	300 //30 secs  
 
 //on --> 0  off --> 1
 #define KEYS_ON  0
@@ -246,7 +266,7 @@ inline void keysOff() {	//turns backlight power on or off
 int GetKeyPressed(void) {	//return value of /tmp/keypress
 	static const char keyfile[] = "/tmp/keypressed";
 	FILE *key = fopen(keyfile, "r+");
-	int keybr;
+	int keybr=-255;
 	if (key != NULL) {
 		char buf [5];
 		keybr = atoi(fgets(buf, sizeof buf, key));
@@ -263,6 +283,8 @@ int GetKeyPressed(void) {	//return value of /tmp/keypress
 
 static timer_t keys_timerid = 0;
 static timer_t lcd_timerid = 0;
+static timer_t power_timerid = 0;
+
 static unsigned int bScreenOff = 0;
 
 inline void screenOn(){	
@@ -297,6 +319,11 @@ static void onTimer(int sig, siginfo_t *si, void *uc)
 	
 		case LCD_TIMER:
 			screenOff();
+			break;
+
+		case POWER_TIMER:
+			system("/usr/local/sbin/onPowerDown");
+		
 			break;
 
 		default:
@@ -343,7 +370,7 @@ timer_t create_timer(int timerName, unsigned int freq_msecs)
    return timerid;
 }
 							
-int set_timer(timer_t timerid, unsigned int freq_msecs)
+static int set_timer(timer_t timerid, unsigned int freq_msecs)
 {
     struct itimerspec 	its;
 						its.it_value.tv_sec = freq_msecs / 100;
@@ -357,7 +384,36 @@ int set_timer(timer_t timerid, unsigned int freq_msecs)
    
    return 1;
 }
-   
+
+volatile static int powerDown = 0;
+volatile static int suspend = 0;
+volatile static int newMsg = 0;
+volatile static int valkeyb = 0;
+volatile static int	flashKeyBrd = 0;
+
+
+void _powerDown(int sig)
+{
+	// SIGUSR1 handler 
+	powerDown = 1;
+}
+
+
+void _suspend(int sig)
+{
+	// SIGUSR2 handler 
+	suspend = 1;
+}
+
+void _newMsg(int sig)
+{
+	newMsg = 1;
+	flashKeyBrd = 1;
+}
+
+
+					
+					
 int main(int argc, char **argv) {
 	int lid = LID_UNKNOWN; 
 	int power = PWR_UNKNOWN;
@@ -374,19 +430,64 @@ int main(int argc, char **argv) {
 
 	keys_timerid = create_timer(KEYS_TIMER, KEYS_TIMEOUT);
 	lcd_timerid = create_timer(LCD_TIMER, LCD_TIMEOUT);
+	power_timerid = create_timer(POWER_TIMER, 0);
+
+	signal(SIGQUIT, _powerDown);
+	signal(SIGINT, _suspend);
+	signal(SIGUSR1, _newMsg);
 
 	while(1) {		//main loop
 			
-		if(!power && GetKeyPressed() == 1) //if there is power the timers are not active, so nothing needs to be done
+		if( (!power || newMsg) && GetKeyPressed() == 1) //if there is power the timers are not active, so nothing needs to be done
 		{	
+			if(!power){
 			//a key has been pressed -- reset the timers
-			set_timer(keys_timerid, KEYS_TIMEOUT);
-			set_timer(lcd_timerid, LCD_TIMEOUT);
+				set_timer(keys_timerid, KEYS_TIMEOUT);
+				set_timer(lcd_timerid, LCD_TIMEOUT);
 			
-			screenOn();
+				screenOn();
+			}
+			
+			if(newMsg && valkeyb){
+				//stop flashing the keyboard
+				keyb(valkeyb);
+				toggleLED(0);
+				valkeyb = 0;
+				newMsg = 0;
+			}
 		}
 
+		if(newMsg){
+			if(!valkeyb)
+				valkeyb = getkeyb();
+			
+			toggleLED(flashKeyBrd);
+			
+			if(flashKeyBrd){
+				keyb(valkeyb);
+				flashKeyBrd=0;
+			}
+			else{
+				keyb(0);
+				flashKeyBrd=1;
+			}
+		}
+		
+		if(powerDown && !suspend)
+		{
+			set_timer(power_timerid, POWER_TIMEOUT);
+			powerDown = 0;
+		}		
+			
+		if(suspend)
+		{
+			set_timer(power_timerid, 0);
 
+			suspend = 0;
+			powerDown = 0;
+		}		
+
+		
 		if(lid != lidstate()) 
 		{	
 			lid = lidstate();
@@ -422,7 +523,7 @@ int main(int argc, char **argv) {
 				keyb(dimkeyb);	//and dim lights
 			}
 		}
-			
+
 		sleep(1);		//wait one second
 	}
 }
