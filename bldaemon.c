@@ -57,8 +57,6 @@ int lidstate() {
 	int fd;
 	int retval;
 	void *map_base;
-	static const char lidfile[] = "/tmp/lidstate";
-	FILE *lidstat = fopen(lidfile, "w");
 
 	fd = open("/dev/mem", O_RDONLY | O_SYNC);
    	if (fd < 0) {printf("Please run as root"); exit(1);}
@@ -70,22 +68,19 @@ int lidstate() {
 	{
 		case 0: /* lid is closed */
 			retval = LID_CLOSED;
-			fputs("0", lidstat);
 			break;
 
 		case 1: /* lid is open */
 			retval = LID_OPEN;
-			fputs("1", lidstat);
 			break;
 
 		default:
 			retval = LID_UNKNOWN;
-			fputs("255", lidstat);
+
 	}
 
 	if(munmap(map_base, MAP_SIZE) == -1) exit(255) ;
 	close(fd);
-	fclose(lidstat);
 	return retval;
 }
 
@@ -283,7 +278,7 @@ inline void screenOn(){
 		bScreenOff = 0;
 	}
 
-   /* Unlock the timer signal, so that timer notification can be delivered */
+   /* Unlock the timer signal, so that timer notification nan be delivered */
    if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
 	   perror("sigprocmask");
 }
