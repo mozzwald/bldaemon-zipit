@@ -23,7 +23,9 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <unistd.h> /* close */
-
+#include <linux/input.h>
+#include <string.h>
+#include <pthread.h>
 
 #include <unistd.h>
 #include <time.h>
@@ -35,6 +37,11 @@
 
 #define GPIO 98	/* lid switch */
 #define GPIO_BASE 0x40E00000 /* PXA270 GPIO Register Base */
+
+pthread_t get_keypressed[1];
+int wasKeyPressed = 0;
+pthread_mutex_t lock;
+static int evfd;
 
 typedef unsigned long u32;
 
@@ -173,7 +180,7 @@ int keyb(int keybr) {	//set keyboard to given brightness
 	return success;
 }
 
-int toggleLED(int bOn) {	//set keyboard to given brightness
+int toggleLED(int bOn) {
 	static const char keyfile[] = "/sys/class/leds/z2:green:wifi/brightness";
 	FILE *key = fopen(keyfile, "w");
 	int success;
@@ -251,7 +258,7 @@ void keysOn() {	//turns backlight power on or off
 	   perror("sigprocmask");
 }
 
-inline void keysOff() {	//turns backlight power on or off
+static inline void keysOff() {	//turns backlight power on or off
 
 	FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
 
@@ -263,19 +270,35 @@ inline void keysOff() {	//turns backlight power on or off
 	}	
 }
 
-int GetKeyPressed(void) {	//return value of /tmp/keypress
-	static const char keyfile[] = "/tmp/keypressed";
-	FILE *key = fopen(keyfile, "r+");
-	int keybr=-255;
-	if (key != NULL) {
-		char buf [5];
-		keybr = atoi(fgets(buf, sizeof buf, key));
-		//reset the value to zero		
-		if(keybr != 0) fputs("0", key);
-		
-		fclose(key);
-	}
-	return keybr;
+/* pthread function to watch for keypresses */
+void* GetKeyPressed(void *arg) {
+	ssize_t n;
+	struct input_event ev;
+	
+    while (1) {
+        n = read(evfd, &ev, sizeof ev);
+        if (n == (ssize_t)-1) {
+            if (errno == EINTR)
+                continue;
+            else
+                break;
+        } else
+        if (n != sizeof ev) {
+            errno = EIO;
+            break;
+        }
+        if (ev.type == EV_KEY && ev.value >= 0 && ev.value <= 2){
+			pthread_mutex_lock(&lock);
+			wasKeyPressed = 1;
+			pthread_mutex_unlock(&lock);
+            //printf("%s 0x%04x (%d)\n", evval[ev.value], (int)ev.code, (int)ev.code);
+        }
+
+    }
+    fflush(stdout);
+    fprintf(stderr, "%s.\n", strerror(errno));
+
+	return NULL;
 }
 
 
@@ -287,7 +310,7 @@ static timer_t power_timerid = 0;
 
 static unsigned int bScreenOff = 0;
 
-inline void screenOn(){	
+static inline void screenOn(){	
 	sigset_t mask;
 	/* Block timer signal temporarily */
 	sigemptyset(&mask);
@@ -305,7 +328,7 @@ inline void screenOn(){
 	   perror("sigprocmask");
 }
 	
-inline void screenOff(){	
+static inline void screenOff(){	
 	system("echo 1 >/sys/class/graphics/fb0/blank");
 	bScreenOff = 1;
 }
@@ -423,7 +446,8 @@ int main(int argc, char **argv) {
 	int dimkeyb=300;		//keyboard brightness on battery
 	int keyTimer = 0;
 
-	system("echo -ne \"\\033[9;0]\" >/dev/tty0");	//set screen blank to never -- it doesn't blank the frame buffer so don't use it
+	//set screen blank to never -- it doesn't blank the frame buffer so don't use it
+	system("echo -ne \"\\033[9;0]\" >/dev/tty0");
 					
 	//intialize the keyboard lights	
 	keyb(powerstate() == PWR_AC_CORD?brightkeyb:dimkeyb);			
@@ -436,15 +460,27 @@ int main(int argc, char **argv) {
 	signal(SIGINT, _suspend);
 	signal(SIGUSR1, _newMsg);
 
+	/* open input event device */
+	const char *evdev = "/dev/input/event0";
+    evfd = open(evdev, O_RDONLY);
+    if (evfd == -1) {
+        fprintf(stderr, "Cannot open %s: %s.\n", evdev, strerror(errno));
+        return EXIT_FAILURE;
+    }
+
+	/* setup keypressed pthread */
+	pthread_mutex_init(&lock, NULL);
+	pthread_create(&(get_keypressed[1]), NULL, &GetKeyPressed, NULL);
+	
 	while(1) {		//main loop
-			
-		if( (!power || newMsg) && GetKeyPressed() == 1) //if there is power the timers are not active, so nothing needs to be done
+		//if there is power the timers are not active, so nothing needs to be done			
+		if( (!power || newMsg) && wasKeyPressed == 1)
 		{	
 			if(!power){
-			//a key has been pressed -- reset the timers
+				//a key has been pressed -- reset the timers
 				set_timer(keys_timerid, KEYS_TIMEOUT);
 				set_timer(lcd_timerid, LCD_TIMEOUT);
-			
+				wasKeyPressed = 0;
 				screenOn();
 			}
 			
@@ -487,13 +523,6 @@ int main(int argc, char **argv) {
 			powerDown = 0;
 		}		
 
-		
-		if(lid != lidstate()) 
-		{	
-			lid = lidstate();
-			lightswitch(lid);
-		}
-		
 		if(power != powerstate())
 		{	//there has been a change in the powerstate
 			keyTimer = 0;
@@ -522,6 +551,12 @@ int main(int argc, char **argv) {
 				lcdb(dimscr);
 				keyb(dimkeyb);	//and dim lights
 			}
+		}
+
+		if(lid != lidstate()) 
+		{	
+			lid = lidstate();
+			lightswitch(lid);
 		}
 
 		sleep(1);		//wait one second
