@@ -126,8 +126,8 @@ int powerstate() {
 
 //on --> 1  off --> 0
 int lightswitch(int onoroff) {	//turns backlight power on or off
-	static const char screenfile[] = "/sys/class/backlight/pwm-backlight.0/bl_power";
-	static const char keyfile[] = "/sys/class/backlight/pwm-backlight.1/bl_power";
+	static const char screenfile[] = "/sys/class/backlight/pxabus:display-backlight/bl_power";
+	static const char keyfile[] = "/sys/class/backlight/pxabus:keyboard-backlight/bl_power";
 	FILE *scr = fopen(screenfile, "w");
 	FILE *key = fopen(keyfile, "w");
 	int success;
@@ -146,7 +146,7 @@ int lightswitch(int onoroff) {	//turns backlight power on or off
 }
 
 int lcdb(int scrbr) {	//set screen to given brightness
-	static const char screenfile[] = "/sys/class/backlight/pwm-backlight.0/brightness";
+	static const char screenfile[] = "/sys/class/backlight/pxabus:display-backlight/brightness";
 	FILE *scr = fopen(screenfile, "w");
 
 	int success;
@@ -164,7 +164,7 @@ int lcdb(int scrbr) {	//set screen to given brightness
 }
 
 int keyb(int keybr) {	//set keyboard to given brightness
-	static const char keyfile[] = "/sys/class/backlight/pwm-backlight.1/brightness";
+	static const char keyfile[] = "/sys/class/backlight/pxabus:keyboard-backlight/brightness";
 	FILE *key = fopen(keyfile, "w");
 	int success;
 	if (key != NULL) {
@@ -200,7 +200,7 @@ int toggleLED(int bOn) {
 
 
 int getscr(void) {	//return current brightness of screen
-	static const char screenfile[] = "/sys/class/backlight/pwm-backlight.0/actual_brightness";
+	static const char screenfile[] = "/sys/class/backlight/pxabus:display-backlight/actual_brightness";
 	FILE *scr = fopen(screenfile, "r");
 	int scrbr;
 	if (scr != NULL) {
@@ -212,7 +212,7 @@ int getscr(void) {	//return current brightness of screen
 }
 
 int getkeyb(void) {	//return current brightness of keyboard
-	static const char keyfile[] = "/sys/class/backlight/pwm-backlight.1/actual_brightness";
+	static const char keyfile[] = "/sys/class/backlight/pxabus:keyboard-backlight/actual_brightness";
 	FILE *key = fopen(keyfile, "r");
 	int keybr;
 	if (key != NULL) {
@@ -244,7 +244,7 @@ void keysOn() {	//turns backlight power on or off
 	if (sigprocmask(SIG_SETMASK, &mask, NULL) == -1)
 	   perror("sigprocmask");
 
-	FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
+	FILE *key = fopen("/sys/class/backlight/pxabus:keyboard-backlight/bl_power", "w");
 
 	if (key != NULL) {
 		char buf [5];
@@ -260,7 +260,7 @@ void keysOn() {	//turns backlight power on or off
 
 static inline void keysOff() {	//turns backlight power on or off
 
-	FILE *key = fopen("/sys/class/backlight/pwm-backlight.1/bl_power", "w");
+	FILE *key = fopen("/sys/class/backlight/pxabus:keyboard-backlight/bl_power", "w");
 
 	if (key != NULL) {
 		char buf [5];
@@ -440,10 +440,10 @@ void _newMsg(int sig)
 int main(int argc, char **argv) {
 	int lid = LID_UNKNOWN; 
 	int power = PWR_UNKNOWN;
-	int brightscr=1023;	//screen brightness on AC (default at start)
-	int brightkeyb=512;	//keyboard brightness on AC
-	int dimscr=512;		//screen brightness on battery
-	int dimkeyb=300;		//keyboard brightness on battery
+	int brightscr=8;	//screen brightness on AC (default at start)
+	int brightkeyb=4;	//keyboard brightness on AC
+	int dimscr=4;		//screen brightness on battery
+	int dimkeyb=1;		//keyboard brightness on battery
 	int keyTimer = 0;
 
 	//set screen blank to never -- it doesn't blank the frame buffer so don't use it
