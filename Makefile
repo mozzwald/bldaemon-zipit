@@ -1,7 +1,7 @@
 # Makefile for bldaemon-zipit
 CC?=gcc
-CFLAGS=-L. -L.. -O2 --std=c99 -lrt
-LIBS=
+CFLAGS=-L. -L.. -O2 --std=c99
+LIBS=-lrt -lpthread -lconfuse
 
 
 all:

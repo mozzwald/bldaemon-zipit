@@ -1,9 +1,12 @@
 Backlight daemon for Zipit Z2
 
 2010-04-26 Tal Stokes
-2012-02-20 Joe Honold <mozzwald@mozzwald.com>
-2012-03-08 mcmajeres  	  -- added seperate timer for keyboard -- works in conjunction with ebindkeys
+2012-02-20 Joe Honold
+2012-03-08 mcmajeres      -- added seperate timer for keyboard -- works in conjunction with ebindkeys
 2012-03-23 mcmajeres      -- changed blanking control to the framebuffer and added posix timers -- still have a polling loop :(
+2016-02-26 Joe Honold     -- change keypress detection to use pthread & evdev (removes ebindkeys dependency)
+                          -- added support for config file, now requires libconfuse
+                          -- added example config file
 
 Manages screen and keyboard backlights:
   -turns them off when lid is closed and on when lid is opened
