@@ -228,7 +228,7 @@ int toggleLED(int bOn) {
 
 
 int getscr(void) {	//return current brightness of screen
-	sprintf(scrbuf, "%s%s", cfg_getstr(cfg, "scrbfile"), "actual_brightness");
+	sprintf(scrbuf, "%s%s", cfg_getstr(cfg, "scrbfile"), "brightness");
 	FILE *scr = fopen(scrbuf, "r");
 
 	int scrbr;
@@ -241,7 +241,7 @@ int getscr(void) {	//return current brightness of screen
 }
 
 int getkeyb(void) {	//return current brightness of keyboard
-	sprintf(keybuf, "%s%s", cfg_getstr(cfg, "keybfile"), "actual_brightness");
+	sprintf(keybuf, "%s%s", cfg_getstr(cfg, "keybfile"), "brightness");
 	FILE *key = fopen(keybuf, "r");
 
 	int keybr;
@@ -282,7 +282,7 @@ void keysOn() {	//turns backlight power on or off
 		fclose(key);
 	}
 
-   /* Unlock the timer signal, so that timer notification nan be delivered */
+   /* Unlock the timer signal, so that timer notification can be delivered */
    if (sigprocmask(SIG_UNBLOCK, &mask, NULL) == -1)
 	   perror("sigprocmask");
 }
@@ -516,17 +516,15 @@ int main(int argc, char **argv) {
 	//first screen blanking is always white so blank it and turn it back on once
 	screenOff();
 	screenOn();
-	
-	//intialize the keyboard and screen backlights
-	power = powerstate();
-	lcdb(power == PWR_AC_CORD?brightscr:dimscr);
-	screenOn();
-	keyb(power == PWR_AC_CORD?brightkeyb:dimkeyb);
-	keysOn();
 
+	//initialize the timers
 	keys_timerid = create_timer(KEYS_TIMER, keytimeout);
 	lcd_timerid = create_timer(LCD_TIMER, lcdtimeout);
 	power_timerid = create_timer(POWER_TIMER, 0);
+
+	//intialize the keyboard and screen backlights
+	keyb(powerstate() == PWR_AC_CORD?brightkeyb:dimkeyb);
+	keysOn();
 
 	signal(SIGQUIT, _powerDown);
 	signal(SIGINT, _suspend);
@@ -534,7 +532,7 @@ int main(int argc, char **argv) {
 
 	while(1) {		//main loop
 		//if there is power the timers are not active, so nothing needs to be done			
-		if( (!power || newMsg) && wasKeyPressed == 1)
+		if( (!power || newMsg) && wasKeyPressed )
 		{
 			if(!power){
 				//a key has been pressed -- reset the timers
@@ -594,8 +592,8 @@ int main(int argc, char **argv) {
 				set_timer(keys_timerid, 0);
 				set_timer(lcd_timerid, 0);
 			
-				dimscr = getscr();      //store current brightness  as dim values
-				dimkeyb = getkeyb();
+				//dimscr = getscr();      //store current brightness  as dim values
+				//dimkeyb = getkeyb();
 				keysOn();
 				lcdb(brightscr);
 				keyb(brightkeyb);	//and brighten lights
@@ -605,8 +603,8 @@ int main(int argc, char **argv) {
 				set_timer(keys_timerid, keytimeout);
 				set_timer(lcd_timerid, lcdtimeout);
 			
-				brightscr = getscr();   //store current brightness as bright
-				brightkeyb = getkeyb();
+				//brightscr = getscr();   //store current brightness as bright
+				//brightkeyb = getkeyb();
 				lcdb(dimscr);
 				keyb(dimkeyb);	//and dim lights
 			}
